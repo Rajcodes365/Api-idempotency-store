@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API Idempotency Store</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #ffffff;
+      --text: #1b1f24;
+      --muted: #55606e;
+      --border: #c4cad3;
+      --accent: #1a56c4;
+      --accent-text: #ffffff;
+      --error-bg: #fdecec;
+      --error-text: #8a1c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 1rem;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    main {
+      max-width: 48rem;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+    h1 { margin-top: 0; font-size: 1.5rem; }
+    p.description { color: var(--muted); }
+    label { display: block; font-weight: 600; margin-bottom: 0.4rem; }
+    textarea {
+      width: 100%;
+      min-height: 12rem;
+      padding: 0.75rem;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      resize: vertical;
+    }
+    .buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 1rem; }
+    button {
+      font: inherit;
+      padding: 0.6rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      cursor: pointer;
+      background: var(--card);
+      color: var(--accent);
+    }
+    button.primary { background: var(--accent); color: var(--accent-text); }
+    button:focus-visible, textarea:focus-visible {
+      outline: 3px solid #f2a900;
+      outline-offset: 2px;
+    }
+    .error {
+      background: var(--error-bg);
+      color: var(--error-text);
+      border: 1px solid var(--error-text);
+      border-radius: 6px;
+      padding: 0.6rem 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .error[hidden] { display: none; }
+    h2 { font-size: 1.1rem; margin-bottom: 0.4rem; }
+    pre {
+      margin: 0;
+      padding: 0.75rem;
+      background: #eef1f5;
+      border-radius: 6px;
+      overflow-x: auto;
+      min-height: 3rem;
+      font-size: 0.9rem;
+    }
+    @media (max-width: 480px) {
+      button { flex: 1 1 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>API Idempotency Store</h1>
+    <p class="description">
+      Edit the JSON input, then press <strong>Run Example</strong>. If the key was
+      already seen, the original saved response is returned. Otherwise the new
+      response is recorded. This is an offline, in-memory demonstration.
+    </p>
+
+    <label for="input">Input JSON</label>
+    <textarea id="input" spellcheck="false" aria-describedby="error"></textarea>
+
+    <div class="buttons">
+      <button type="button" id="run" class="primary">Run Example</button>
+      <button type="button" id="reset">Reset Input</button>
+    </div>
+
+    <div id="error" class="error" role="alert" hidden></div>
+
+    <h2 id="result-heading">Result</h2>
+    <pre id="result" aria-labelledby="result-heading" aria-live="polite">Press "Run Example" to see the result.</pre>
+  </main>
+
+  <script>
+    // Wrapped in an IIFE so no top-level names can collide with other scripts.
+    // This page intentionally does NOT load main.js.
+    (function () {
+      var DEFAULT_INPUT = {
+        store: {},
+        key: 'req-1',
+        response: { orderId: 'o1' }
+      };
+
+      function isPlainObject(value) {
+        return value !== null && typeof value === 'object' && !Array.isArray(value);
+      }
+
+      function cloneJson(value) {
+        var text = JSON.stringify(value);
+        if (text === undefined) {
+          throw new TypeError('Values must be JSON-compatible.');
+        }
+        return JSON.parse(text);
+      }
+
+      // Same domain rules as main.js, under a unique name.
+      function solveBrowser(input) {
+        if (!isPlainObject(input)) {
+          throw new TypeError('Input must be an object with store, key and response.');
+        }
+        var store = input.store;
+        var key = input.key;
+        var response = input.response;
+
+        if (!isPlainObject(store)) {
+          throw new TypeError('"store" must be a plain object.');
+        }
+        if (typeof key !== 'string') {
+          throw new TypeError('"key" must be a string.');
+        }
+        if (key.trim() === '') {
+          throw new Error('Idempotency key must not be empty or whitespace-only.');
+        }
+        if (key === '__proto__') {
+          throw new Error('Idempotency key "__proto__" is reserved and not allowed.');
+        }
+        if (response === undefined) {
+          throw new TypeError('"response" is required.');
+        }
+
+        var newStore = cloneJson(store);
+
+        if (Object.prototype.hasOwnProperty.call(newStore, key)) {
+          return { replayed: true, response: cloneJson(newStore[key]), store: newStore };
+        }
+
+        newStore[key] = cloneJson(response);
+        return { replayed: false, response: cloneJson(response), store: newStore };
+      }
+
+      var inputEl = document.getElementById('input');
+      var resultEl = document.getElementById('result');
+      var errorEl = document.getElementById('error');
+
+      function showError(message) {
+        errorEl.textContent = message;
+        errorEl.hidden = false;
+      }
+
+      function clearError() {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
+      }
+
+      function runExample() {
+        clearError();
+        var parsed;
+        try {
+          parsed = JSON.parse(inputEl.value);
+        } catch (parseError) {
+          resultEl.textContent = '';
+          showError('Invalid JSON: ' + parseError.message);
+          return;
+        }
+        try {
+          var result = solveBrowser(parsed);
+          resultEl.textContent = JSON.stringify(result, null, 2);
+        } catch (domainError) {
+          resultEl.textContent = '';
+          showError(domainError.message);
+        }
+      }
+
+      function resetInput() {
+        clearError();
+        inputEl.value = JSON.stringify(DEFAULT_INPUT, null, 2);
+        resultEl.textContent = 'Press "Run Example" to see the result.';
+      }
+
+      document.getElementById('run').addEventListener('click', runExample);
+      document.getElementById('reset').addEventListener('click', resetInput);
+      resetInput();
+    })();
+  </script>
+</body>
+</html>
